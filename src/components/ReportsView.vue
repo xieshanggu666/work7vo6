@@ -54,9 +54,15 @@ const matchDist = computed(() => {
     const cand = store.candidates.find(c => c.id === a.candidate_id)
     const pos = store.positions.find(p => p.id === a.position_id)
     if (!cand || !pos) return
-    // 简化：用技能覆盖度粗估匹配
-    const cover = pos.skills.filter(pr => cand.skills.some(cs => cs.k === pr.k)).length / (pos.skills.length || 1)
-    const s = cover * 100
+    // 统一使用落库的五维加权匹配分；未落库的极端情况下退回技能覆盖度估算
+    const row = store.matches.find(m => m.candidate_id === a.candidate_id && m.position_id === a.position_id)
+    let s
+    if (row) {
+      s = row.score
+    } else {
+      const cover = pos.skills.filter(pr => cand.skills.some(cs => cs.k === pr.k)).length / (pos.skills.length || 1)
+      s = cover * 100
+    }
     if (s >= 80) buckets.hi.count++
     else if (s >= 60) buckets.mid.count++
     else buckets.sink.count++
@@ -154,6 +160,7 @@ const avgSalary = computed(() => {
         <div class="leg">
           <div v-for="s in matchDist" :key="s.label"><span class="sw" :style="{background:s.color}"></span>{{ s.label }}<b>{{ s.count }}人</b></div>
         </div>
+        <div class="muted tip">按落库的五维加权匹配总分（技能/年限/薪资/学历/城市）统计，与智能匹配推荐分数同源。</div>
       </div>
 
       <div class="card">

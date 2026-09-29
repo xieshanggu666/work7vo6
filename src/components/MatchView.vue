@@ -121,6 +121,7 @@ const topN = computed(() => (result.value?.candidates || result.value?.positions
               </div>
             </div>
             <div class="weak" v-if="m.weakness && m.weakness !== '无显著短板'"><em>短板：</em>{{ m.weakness }}</div>
+            <div class="muted note">{{ m.reason }}</div>
             <div class="acts">
               <button v-if="!appliedPair(m.position_id, selCand)" class="succ" @click="store.apply(m.position_id, selCand)">为其投递此职位</button>
               <button v-else class="primary" disabled>已投递</button>
