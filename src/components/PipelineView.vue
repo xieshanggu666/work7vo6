@@ -51,6 +51,13 @@ const nextStageLabel = s => ({ screening: '筛选', interview: '面试', offer: 
           <div class="kcard card" v-for="a in viewList.filter(c => c.stage === s.k)" :key="a.id">
             <div class="kname">{{ a.candidate }}</div>
             <div class="kpos muted">{{ a.position }} · {{ a.dept }}</div>
+            <div class="kmatch" v-if="a.match">
+              <span class="msc" :class="a.match.score >= 75 ? 's-hi' : a.match.score >= 55 ? 's-mid' : 's-lo'">{{ a.match.score }}</span>
+              <div class="minfo">
+                <div class="mweak" v-if="a.match.weakness && a.match.weakness !== '无显著短板'">短板：{{ a.match.weakness }}</div>
+                <div class="mreason muted">{{ a.match.reason }}</div>
+              </div>
+            </div>
             <div class="kskills"><span class="skill-chip" v-for="sk in (a.candSkills||[]).slice(0,4)" :key="sk.k">{{ sk.k }}</span></div>
             <div class="kfoot">
               <span class="muted">{{ a.city }}</span>
@@ -83,6 +90,11 @@ const nextStageLabel = s => ({ screening: '筛选', interview: '面试', offer: 
 .kname { font-weight: 700; font-size: 14px; }
 .kpos { font-size: 12px; }
 .kskills { display: flex; flex-wrap: wrap; }
+.kmatch { display: flex; gap: 8px; align-items: flex-start; background: var(--panel2); border-radius: 8px; padding: 6px 8px; }
+.kmatch .msc { flex-shrink: 0; min-width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; }
+.minfo { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mweak { font-size: 11px; color: var(--red); }
+.mreason { font-size: 10.5px; line-height: 1.4; word-break: break-all; }
 .kfoot { display: flex; flex-direction: column; gap: 8px; }
 .ka { display: flex; gap: 6px; flex-wrap: wrap; }
 .ka button { font-size: 11px; padding: 4px 8px; }

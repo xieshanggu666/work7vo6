@@ -50,13 +50,10 @@ const deptProgress = computed(() => {
 
 const matchDist = computed(() => {
   const buckets = { sink: { label: '低匹配 0-59', count: 0, color: 'var(--red)' }, mid: { label: '一般 60-79', count: 0, color: 'var(--accent2)' }, hi: { label: '高匹配 80+', count: 0, color: 'var(--green)' } }
+  // 直接使用已落库的人岗匹配总分，与职位推荐/候选人推荐保持同一口径
   store.applications.forEach(a => {
-    const cand = store.candidates.find(c => c.id === a.candidate_id)
-    const pos = store.positions.find(p => p.id === a.position_id)
-    if (!cand || !pos) return
-    // 简化：用技能覆盖度粗估匹配
-    const cover = pos.skills.filter(pr => cand.skills.some(cs => cs.k === pr.k)).length / (pos.skills.length || 1)
-    const s = cover * 100
+    if (!a.match) return
+    const s = a.match.score
     if (s >= 80) buckets.hi.count++
     else if (s >= 60) buckets.mid.count++
     else buckets.sink.count++

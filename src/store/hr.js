@@ -20,6 +20,7 @@ export const useHrStore = defineStore('hr', {
     interviews: s => s.data?.interviews || [],
     offers: s => s.data?.offers || [],
     channels: s => s.data?.channels || [],
+    matches: s => s.data?.matches || [],
     openPositions: s => (s.data?.positions || []).filter(p => p.status === 'open')
   },
   actions: {

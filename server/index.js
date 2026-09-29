@@ -13,61 +13,87 @@ const STAGES = ['submitted', 'screening', 'interview', 'offer', 'hired']
 const NEXT_STAGE = { submitted: 'screening', screening: 'interview', interview: 'offer', offer: 'hired' }
 
 // ---------------- 人岗匹配评分算法 ----------------
+// 五维权重，合计闭合为 1.0；简历关键词为封顶附加分，不占用维度权重
+const MATCH_W = { skill: 0.4, year: 0.2, salary: 0.15, edu: 0.15, city: 0.1 }
+const KEYWORD_BONUS_CAP = 5
+
 function computeMatch(cand, pos) {
   const cSkills = parseSkills(cand.skills)
   const pSkills = parseSkills(pos.skills)
   const dims = []
-  let total = 0, weightSum = 0
 
-  // 技能匹配：候选者命中职位要求技能的熟练度加权
-  let skillScore = 0, matched = 0
+  // 技能匹配：候选者命中职位要求技能的熟练度按职位权重加权
+  let skillScore = 0, matched = 0, skillWeightSum = 0
   pSkills.forEach(req => {
     const hit = cSkills.find(c => c.k === req.k)
-    if (hit) { skillScore += Math.min(100, (hit.idx / 5) * 100) * req.w; matched++ }
-    weightSum += req.w
+    if (hit) { skillScore += Math.min(100, (num(hit.idx, 3) / 5) * 100) * req.w; matched++ }
+    skillWeightSum += req.w
   })
-  const skillCover = matched / (pSkills.length || 1)
-  skillScore = weightSum ? skillScore / weightSum : 0
-  dims.push({ k: '技能', score: Math.round(skillScore), w: 0.4 })
-  total += skillScore * 0.4
+  const skillCover = pSkills.length ? matched / pSkills.length : 1
+  skillScore = pSkills.length ? (skillWeightSum ? skillScore / skillWeightSum : 0) : 70
+  dims.push({ k: '技能', score: Math.round(skillScore), w: MATCH_W.skill })
 
   // 年限匹配
-  const ideal = pos.years
-  let yearScore = cand.years >= ideal ? 90 : Math.max(30, 100 - (ideal - cand.years) * 15)
-  dims.push({ k: '经验年限', score: Math.round(yearScore), w: 0.2 })
-  total += yearScore * 0.2
+  const ideal = num(pos.years, 0)
+  const yearScore = num(cand.years, 0) >= ideal ? 90 : Math.max(30, 100 - (ideal - num(cand.years, 0)) * 15)
+  dims.push({ k: '经验年限', score: Math.round(yearScore), w: MATCH_W.year })
 
-  // 薪资带宽匹配
-  const mid = (pos.salary_min + pos.salary_max) / 2
-  let salScore
-  if (cand.exp_salary <= 0) salScore = 70
-  else if (cand.exp_salary <= pos.salary_max && cand.exp_salary >= pos.salary_min) salScore = 90
-  else if (cand.exp_salary <= pos.salary_max * 1.15) salScore = 70
-  else if (cand.exp_salary < pos.salary_min) salScore = 75
-  else salScore = 45
-  dims.push({ k: '薪资匹配', score: salScore, w: 0.15 })
-  total += salScore * 0.15
-  void mid
+  // 薪资带宽匹配（先判低于带宽，再判高于带宽，避免分支被吞）
+  const sal = num(cand.exp_salary, 0)
+  let salScore, salNote, salOver = false, salOverMuch = false
+  if (sal <= 0) { salScore = 70; salNote = '期望薪资未填写' }
+  else if (sal < pos.salary_min) { salScore = 75; salNote = '期望薪资低于带宽' }
+  else if (sal <= pos.salary_max) { salScore = 90; salNote = '期望薪资在带宽内' }
+  else if (sal <= pos.salary_max * 1.15) { salScore = 70; salNote = '期望薪资略高于带宽'; salOver = true }
+  else { salScore = 45; salNote = '期望薪资超出带宽'; salOver = true; salOverMuch = true }
+  dims.push({ k: '薪资匹配', score: salScore, w: MATCH_W.salary })
 
   // 学历匹配
   const eduRank = { '博士': 100, '硕士': 85, '本科': 70, '大专': 55 }
-  const eduScore = eduRank[cand.edu] || 65
-  dims.push({ k: '学历', score: eduScore, w: 0.15 })
-  total += eduScore * 0.15
+  const eduScore = eduRank[cand.edu] ?? 65
+  dims.push({ k: '学历', score: eduScore, w: MATCH_W.edu })
 
   // 城市匹配
-  const cityScore = (pos.city === '全国' || pos.city === cand.city) ? 90 : 65
-  // 简历关键词加分
-  const keywordBonus = (cand.raw || '').split(/[,，。；;\s]/).filter(w => w && (pos.name.includes(w) || pos.skills.includes(w))).length
-  dims.push({ k: '城市地点', score: cityScore, w: 0.1 })
+  const cityHit = pos.city === '全国' || (!!cand.city && cand.city === pos.city)
+  const cityScore = cityHit ? 90 : 65
+  dims.push({ k: '城市地点', score: cityScore, w: MATCH_W.city })
 
-  const score = Math.round(total + keywordBonus * 1.5)
+  // 简历关键词加分（在职位名/要求技能中命中，封顶，不计入维度权重）
+  const keywords = new Set([...pSkills.map(s => s.k), ...String(pos.name || '').split(/[\s/、,，]+/).filter(Boolean)])
+  const tokens = String(cand.raw || '').split(/[,，。；;、/\s]+/).filter(Boolean)
+  const hitKws = new Set([...keywords].filter(kw => tokens.some(t => t.includes(kw))))
+  const keywordBonus = Math.min(KEYWORD_BONUS_CAP, hitKws.size * 1.5)
+
+  // 五维加权（权重合计 1.0）+ 封顶关键词附加分
+  const base = skillScore * MATCH_W.skill
+    + yearScore * MATCH_W.year
+    + salScore * MATCH_W.salary
+    + eduScore * MATCH_W.edu
+    + cityScore * MATCH_W.city
+  const score = Math.min(100, Math.round(base + keywordBonus))
+
+  // 短板：覆盖技能/年限/薪资/学历/城市五个维度
   const weakness = []
   if (skillCover < 0.5) weakness.push('关键技能覆盖不足')
   if (yearScore < 65) weakness.push('经验年限偏低')
-  if (salScore < 60) weakness.push('期望薪资超带宽')
-  const reason = `技能覆盖${Math.round(skillCover * 100)}%，年限${cand.years}年，综合匹配度良好${keywordBonus ? '+关键词加分' : ''}`
-  return { score: Math.min(100, score), dims, reason: reason || '匹配度评估', weakness: weakness.join('、') || '无显著短板' }
+  if (salOverMuch) weakness.push('期望薪资超出带宽')
+  else if (salOver) weakness.push('期望薪资略高于带宽')
+  if (eduScore < 60) weakness.push('学历相对偏低')
+  if (!cityHit) weakness.push('工作城市不匹配')
+
+  const rating = score >= 80 ? '高匹配' : score >= 65 ? '匹配度良好' : score >= 55 ? '基本匹配' : '匹配度偏低'
+  const cityNote = cityHit
+    ? (pos.city === '全国' ? '城市全国可选' : `城市${cand.city}与职位一致`)
+    : `城市${cand.city || '未知'}≠${pos.city}`
+  const reason = [
+    `技能覆盖${Math.round(skillCover * 100)}%`,
+    `经验${cand.years}/${ideal}年`,
+    salNote,
+    `${cand.edu || '学历未知'}`,
+    cityNote
+  ].join('，') + `；综合${rating}${keywordBonus ? `（简历关键词+${keywordBonus.toFixed(1)}分）` : ''}`
+
+  return { score, dims, reason, weakness: weakness.join('、') || '无显著短板' }
 }
 
 function upsertMatch(candId, posId) {
@@ -89,19 +115,27 @@ app.get('/api/state', (req, res) => {
   const interviews = db.prepare('SELECT * FROM interviews ORDER BY id DESC').all()
   const offers = db.prepare('SELECT * FROM offers ORDER BY id DESC').all()
   const channels = db.prepare('SELECT * FROM channels ORDER BY id').all()
+  const matches = db.prepare('SELECT * FROM matches ORDER BY id DESC').all().map(m => ({
+    ...m,
+    score: num(m.score),
+    dims: parseDims(m.dims, '[]')
+  }))
+  const matchOf = (cid, pid) => matches.find(m => m.candidate_id === cid && m.position_id === pid) || null
   const pipelines = apps.map(a => {
     const pos = positions.find(p => p.id === a.position_id)
     const cand = candidates.find(c => c.id === a.candidate_id)
     const its = interviews.filter(i => i.application_id === a.id)
     const of = offers.find(o => o.application_id === a.id) || null
+    const mt = matchOf(a.candidate_id, a.position_id)
     return {
       ...a,
       position: pos ? pos.name : '', dept: pos ? pos.dept : '', city: pos ? pos.city : '',
       candidate: cand ? cand.name : '', candSkills: cand ? cand.skills : [],
+      match: mt ? { score: mt.score, dims: mt.dims, reason: mt.reason, weakness: mt.weakness } : null,
       interviews: its, offer: of
     }
   })
-  res.json({ positions, candidates, applications: pipelines, interviews, offers, channels })
+  res.json({ positions, candidates, applications: pipelines, interviews, offers, channels, matches })
 })
 
 app.get('/api/summary', (req, res) => {
@@ -147,11 +181,9 @@ app.get('/api/match/pos/:pid', (req, res) => {
   if (!pos) return res.status(404).json({ ok: false })
   const cands = db.prepare('SELECT * FROM candidates').all()
   const rows = cands.map(c => {
-    const m = computeMatch(c, pos)
-    const exists = db.prepare('SELECT * FROM matches WHERE candidate_id=? AND position_id=?').get(c.id, posId)
-    if (!exists) db.prepare('INSERT INTO matches(candidate_id,position_id,score,dims,reason,weakness) VALUES(?,?,?,?,?,?)')
-      .run(c.id, posId, m.score, JSON.stringify(m.dims), m.reason, m.weakness)
-    return { candidate_id: c.id, name: c.name, skills: parseSkills(c.skills), years: c.years, edu: c.edu, city: c.city, exp_salary: c.exp_salary, ...m }
+    // 每次匹配都重算并落库，保证推荐结果与已落库结果一致
+    const m = upsertMatch(c.id, posId)
+    return { candidate_id: c.id, name: c.name, skills: parseSkills(c.skills), years: c.years, edu: c.edu, city: c.city, exp_salary: c.exp_salary, score: m.score, dims: m.dims, reason: m.reason, weakness: m.weakness }
   })
   rows.sort((a, b) => b.score - a.score)
   res.json({ position: { ...pos, skills: parseSkills(pos.skills) }, candidates: rows })
@@ -163,8 +195,9 @@ app.get('/api/match/cand/:cid', (req, res) => {
   if (!cand) return res.status(404).json({ ok: false })
   const poss = db.prepare("SELECT * FROM positions WHERE status='open'").all()
   const rows = poss.map(p => {
-    const m = computeMatch(cand, p)
-    return { position_id: p.id, name: p.name, dept: p.dept, city: p.city, level: p.level, salary_min: p.salary_min, salary_max: p.salary_max, ...m }
+    // 与按职位推荐共用同一落库逻辑，保证分数/理由/短板完全一致
+    const m = upsertMatch(candId, p.id)
+    return { position_id: p.id, name: p.name, dept: p.dept, city: p.city, level: p.level, salary_min: p.salary_min, salary_max: p.salary_max, score: m.score, dims: m.dims, reason: m.reason, weakness: m.weakness }
   })
   rows.sort((a, b) => b.score - a.score)
   res.json({ candidate: { name: cand.name, skills: parseSkills(cand.skills), years: cand.years }, positions: rows })
@@ -244,5 +277,13 @@ app.post('/api/channels', (req, res) => {
   db.prepare('INSERT INTO channels(name,cost) VALUES(?,?)').run(b.name, num(b.cost, 5000))
   res.json({ ok: true })
 })
+
+// 启动时按当前算法重算全部已落库匹配，修复历史评分（城市维度缺失、权重不闭合等）
+function refreshAllMatches() {
+  const rows = db.prepare('SELECT candidate_id, position_id FROM matches').all()
+  rows.forEach(r => upsertMatch(r.candidate_id, r.position_id))
+  if (rows.length) console.log(`[HR] refreshed ${rows.length} stored matches`)
+}
+refreshAllMatches()
 
 app.listen(PORT, () => console.log(`[HR] API running at http://localhost:${PORT}`))
